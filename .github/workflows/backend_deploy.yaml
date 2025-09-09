@@ -47,7 +47,9 @@ jobs:
               cd frontend/
               echo "Frontend directory contents:"
               ls -la
+              echo "Installing frontend dependencies..."
               pnpm install --no-frozen-lockfile
+              echo "Building frontend..."
               pnpm build:pages
               cd ..
             else
@@ -65,7 +67,16 @@ jobs:
             cd worker/
             echo "Worker directory contents before:"
             ls -la
+            
+            # 检查 secrets 是否存在
+            if [ -z "${{ secrets.BACKEND_TOML }}" ]; then
+              echo "ERROR: BACKEND_TOML secret is not set"
+              exit 1
+            fi
+            
+            echo "Writing wrangler.toml..."
             echo '${{ secrets.BACKEND_TOML }}' > wrangler.toml
+            echo "Installing worker dependencies..."
             pnpm install --no-frozen-lockfile
 
             if [ -n "$use_mail_wasm_parser" ]; then
@@ -80,19 +91,31 @@ jobs:
             fi
 
             echo "=== Running deploy ==="
+            echo "Listing available scripts:"
+            cat package.json | grep -A 10 '"scripts"'
+            
             if [ -n "$debug_mode" ]; then
               echo "Running in debug mode"
               pnpm run deploy
             else
               echo "Running in normal mode"
+              # 更详细的错误捕获
+              set +e
+              output=""
               output=$(pnpm run deploy 2>&1)
               exit_code=$?
+              set -e
+              
               if [ $exit_code -ne 0 ]; then
                   echo "=== Deploy failed ==="
                   echo "Command failed with exit code $exit_code"
-                  echo "Output:"
+                  echo "=== Full output ==="
                   echo "$output"
+                  echo "=== End of output ==="
                   exit $exit_code
+              else
+                  echo "Deploy successful"
+                  echo "$output"
               fi
             fi
             echo "Deployed for tag ${{ github.ref_name }}"
