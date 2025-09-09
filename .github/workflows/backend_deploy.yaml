@@ -37,7 +37,6 @@ jobs:
           echo "Node version: $(node --version)"
           echo "PNPM version: $(pnpm --version)"
           echo "GitHub ref name: ${{ github.ref_name }}"
-          echo "GitHub event name: ${{ github.event_name }}"
           
           export use_worker_assets=${{ secrets.USE_WORKER_ASSETS }}
           echo "use_worker_assets: ${use_worker_assets:-not set}"
@@ -76,37 +75,39 @@ jobs:
             fi
             
             echo "Writing wrangler.toml..."
-            # 使用更安全的方式写入文件
-            cat > wrangler.toml << 'EOF'
-          ${{ secrets.BACKEND_TOML }}
-          EOF
-          
+            # 使用安全的方式写入文件，避免特殊字符问题
+            echo '${{ secrets.BACKEND_TOML }}' > secret_content.txt
+            echo "Secret content size: $(wc -c < secret_content.txt) bytes"
+            
+            # 逐行检查内容以定位问题行
+            echo "Checking for problematic characters..."
+            line_num=0
+            while IFS= read -r line || [[ -n "$line" ]]; do
+              ((line_num++))
+              # 检查是否包含可能导致问题的字符
+              if [[ "$line" =~ [\$] ]] || [[ "$line" =~ [`] ]] || [[ "$line" =~ [\(] ]] || [[ "$line" =~ [\)] ]]; then
+                echo "WARNING: Line $line_num may contain problematic characters:"
+                echo "  $line"
+              fi
+            done < secret_content.txt
+            
+            # 使用 base64 方式写入文件
+            cat secret_content.txt | base64 -d > wrangler.toml 2>/dev/null || {
+              echo "Using direct method to write wrangler.toml"
+              cat secret_content.txt > wrangler.toml
+            }
+            
             echo "Verifying wrangler.toml content..."
             if [ -f "wrangler.toml" ]; then
               echo "wrangler.toml file size: $(wc -c < wrangler.toml) bytes"
-              echo "First 20 lines of wrangler.toml:"
-              head -n 20 wrangler.toml || true
-              echo "Last 10 lines of wrangler.toml:"
-              tail -n 10 wrangler.toml || true
+              echo "=== First 30 lines of wrangler.toml ==="
+              head -n 30 wrangler.toml
+              echo "=== Last 10 lines of wrangler.toml ==="
+              tail -n 10 wrangler.toml
+              echo "===================================="
             else
               echo "ERROR: wrangler.toml was not created"
               exit 1
-            fi
-            
-            echo "Validating TOML syntax..."
-            # 尝试验证 TOML 语法
-            if command -v python3 &> /dev/null; then
-              echo "Trying to validate TOML with Python..."
-              python3 -c "
-          import toml
-          try:
-              with open('wrangler.toml', 'r') as f:
-                  data = toml.load(f)
-              print('TOML syntax is valid')
-          except Exception as e:
-              print(f'TOML syntax error: {e}')
-              exit(1)
-          " || echo "Python TOML validation failed (continuing anyway)"
             fi
             
             echo "Installing worker dependencies..."
@@ -128,10 +129,6 @@ jobs:
             if [ -f "package.json" ]; then
               grep -A 20 '"scripts"' package.json
             fi
-            
-            # 显示环境变量
-            echo "=== Environment Variables ==="
-            env | grep -E "CLOUDFLARE_|CF_" | sort || true
             
             if [ -n "$debug_mode" ]; then
               echo "Running in debug mode"
@@ -159,8 +156,8 @@ jobs:
               if [ $exit_code -ne 0 ]; then
                   echo "=== Deploy failed ==="
                   echo "Command failed with exit code $exit_code"
-                  echo "Last 50 lines of output:"
-                  echo "$output" | tail -n 50
+                  echo "Last 100 lines of output:"
+                  echo "$output" | tail -n 100
                   exit $exit_code
               else
                   echo "Deploy successful"
