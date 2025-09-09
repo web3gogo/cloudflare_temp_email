@@ -32,38 +32,74 @@ jobs:
 
       - name: Deploy Backend for ${{ github.ref_name }}
         run: |
+          echo "=== Debug Information ==="
+          echo "Current directory: $(pwd)"
+          echo "Node version: $(node --version)"
+          echo "PNPM version: $(pnpm --version)"
+          echo "GitHub ref name: ${{ github.ref_name }}"
+          
           export use_worker_assets=${{ secrets.USE_WORKER_ASSETS }}
+          echo "use_worker_assets: ${use_worker_assets:-not set}"
+          
           if [ -n "$use_worker_assets" ]; then
-            cd frontend/
-            pnpm install --no-frozen-lockfile
-            pnpm build:pages
-            cd ..
+            echo "=== Building frontend assets ==="
+            if [ -d "frontend" ]; then
+              cd frontend/
+              echo "Frontend directory contents:"
+              ls -la
+              pnpm install --no-frozen-lockfile
+              pnpm build:pages
+              cd ..
+            else
+              echo "WARNING: frontend directory not found"
+            fi
           fi
 
           export debug_mode=${{ secrets.DEBUG_MODE }}
           export use_mail_wasm_parser=${{ secrets.BACKEND_USE_MAIL_WASM_PARSER }}
-          cd worker/
-          echo '${{ secrets.BACKEND_TOML }}' > wrangler.toml
-          pnpm install --no-frozen-lockfile
+          echo "debug_mode: ${debug_mode:-not set}"
+          echo "use_mail_wasm_parser: ${use_mail_wasm_parser:-not set}"
+          
+          echo "=== Setting up worker ==="
+          if [ -d "worker" ]; then
+            cd worker/
+            echo "Worker directory contents before:"
+            ls -la
+            echo '${{ secrets.BACKEND_TOML }}' > wrangler.toml
+            pnpm install --no-frozen-lockfile
 
-          if [ -n "$use_mail_wasm_parser" ]; then
-            echo "Using mail-parser-wasm-worker"
-            pnpm add mail-parser-wasm-worker
-            git apply ../.github/config/mail-parser-wasm-worker.patch
-            echo "Applied mail-parser-wasm-worker patch"
-          fi
-
-          if [ -n "$debug_mode" ]; then
-            pnpm run deploy
-          else
-            output=$(pnpm run deploy 2>&1)
-            if [ $? -ne 0 ]; then
-                code=$?
-                echo "Command failed with exit code $code"
-                exit $code
+            if [ -n "$use_mail_wasm_parser" ]; then
+              echo "Using mail-parser-wasm-worker"
+              pnpm add mail-parser-wasm-worker
+              if [ -f "../.github/config/mail-parser-wasm-worker.patch" ]; then
+                git apply ../.github/config/mail-parser-wasm-worker.patch
+                echo "Applied mail-parser-wasm-worker patch"
+              else
+                echo "WARNING: patch file not found"
+              fi
             fi
+
+            echo "=== Running deploy ==="
+            if [ -n "$debug_mode" ]; then
+              echo "Running in debug mode"
+              pnpm run deploy
+            else
+              echo "Running in normal mode"
+              output=$(pnpm run deploy 2>&1)
+              exit_code=$?
+              if [ $exit_code -ne 0 ]; then
+                  echo "=== Deploy failed ==="
+                  echo "Command failed with exit code $exit_code"
+                  echo "Output:"
+                  echo "$output"
+                  exit $exit_code
+              fi
+            fi
+            echo "Deployed for tag ${{ github.ref_name }}"
+          else
+            echo "ERROR: worker directory not found"
+            exit 1
           fi
-          echo "Deployed for tag ${{ github.ref_name }}"
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
